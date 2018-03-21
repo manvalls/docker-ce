@@ -148,6 +148,7 @@ func Service(
 				Secrets:         secrets,
 				Configs:         configs,
 				ReadOnly:        service.ReadOnly,
+				Privileged:      service.Privileged,
 				Privileges:      &privileges,
 				Isolation:       container.Isolation(service.Isolation),
 			},
