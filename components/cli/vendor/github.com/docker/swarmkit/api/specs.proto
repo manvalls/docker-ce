@@ -235,6 +235,12 @@ message ContainerSpec {
 	// Privileged adds all capabilities to the container
 	bool privileged = 40;
 
+	// CapAdd adds some capabilities to the container
+	repeated string cap_add = 41;
+
+	// CapDrop removes some capabilities from the container
+	repeated string cap_drop = 42;
+
 	// StopSignal defines the signal to stop the container.
 	string stop_signal = 20;
 

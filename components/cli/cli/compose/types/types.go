@@ -8,8 +8,6 @@ import (
 // UnsupportedProperties not yet supported by this implementation of the compose file
 var UnsupportedProperties = []string{
 	"build",
-	"cap_add",
-	"cap_drop",
 	"cgroup_parent",
 	"devices",
 	"domainname",

@@ -149,6 +149,8 @@ func Service(
 				Configs:         configs,
 				ReadOnly:        service.ReadOnly,
 				Privileged:      service.Privileged,
+				CapAdd:          service.CapAdd,
+				CapDrop:         service.CapDrop,
 				Privileges:      &privileges,
 				Isolation:       container.Isolation(service.Isolation),
 			},

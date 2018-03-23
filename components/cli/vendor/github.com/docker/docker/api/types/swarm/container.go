@@ -60,6 +60,8 @@ type ContainerSpec struct {
 	OpenStdin       bool                    `json:",omitempty"`
 	ReadOnly        bool                    `json:",omitempty"`
 	Privileged      bool                    `json:",omitempty"`
+	CapAdd          []string                `json:",omitempty"`
+	CapDrop         []string                `json:",omitempty"`
 	Mounts          []mount.Mount           `json:",omitempty"`
 	StopGracePeriod *time.Duration          `json:",omitempty"`
 	Healthcheck     *container.HealthConfig `json:",omitempty"`
