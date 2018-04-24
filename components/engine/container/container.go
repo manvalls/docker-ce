@@ -2,6 +2,7 @@ package container // import "github.com/docker/docker/container"
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ import (
 	"github.com/docker/docker/restartmanager"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/volume"
+	volumemounts "github.com/docker/docker/volume/mounts"
 	"github.com/docker/go-connections/nat"
 	units "github.com/docker/go-units"
 	"github.com/docker/libnetwork"
@@ -46,7 +48,6 @@ import (
 	agentexec "github.com/docker/swarmkit/agent/exec"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/net/context"
 )
 
 const configFileName = "config.v2.json"
@@ -94,7 +95,7 @@ type Container struct {
 	RestartCount           int
 	HasBeenStartedBefore   bool
 	HasBeenManuallyStopped bool // used for unless-stopped restart policy
-	MountPoints            map[string]*volume.MountPoint
+	MountPoints            map[string]*volumemounts.MountPoint
 	HostConfig             *containertypes.HostConfig `json:"-"` // do not serialize the host config in the json, otherwise we'll make the container unportable
 	ExecCommands           *exec.Store                `json:"-"`
 	DependencyStore        agentexec.DependencyGetter `json:"-"`
@@ -128,7 +129,7 @@ func NewBaseContainer(id, root string) *Container {
 		State:         NewState(),
 		ExecCommands:  exec.NewStore(),
 		Root:          root,
-		MountPoints:   make(map[string]*volume.MountPoint),
+		MountPoints:   make(map[string]*volumemounts.MountPoint),
 		StreamConfig:  stream.NewConfig(),
 		attachContext: &attachContext{},
 	}
@@ -450,8 +451,8 @@ func (container *Container) AddMountPointWithVolume(destination string, vol volu
 	if operatingSystem == "" {
 		operatingSystem = runtime.GOOS
 	}
-	volumeParser := volume.NewParser(operatingSystem)
-	container.MountPoints[destination] = &volume.MountPoint{
+	volumeParser := volumemounts.NewParser(operatingSystem)
+	container.MountPoints[destination] = &volumemounts.MountPoint{
 		Type:        mounttypes.TypeVolume,
 		Name:        vol.Name(),
 		Driver:      vol.DriverName(),

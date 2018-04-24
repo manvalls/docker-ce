@@ -181,8 +181,7 @@ func createNetworks(
 		existingNetworkMap[network.Name] = network
 	}
 
-	for internalName, createOpts := range networks {
-		name := namespace.Scope(internalName)
+	for name, createOpts := range networks {
 		if _, exists := existingNetworkMap[name]; exists {
 			continue
 		}
@@ -193,7 +192,7 @@ func createNetworks(
 
 		fmt.Fprintf(dockerCli.Out(), "Creating network %s\n", name)
 		if _, err := client.NetworkCreate(ctx, name, createOpts); err != nil {
-			return errors.Wrapf(err, "failed to create network %s", internalName)
+			return errors.Wrapf(err, "failed to create network %s", name)
 		}
 	}
 	return nil
@@ -249,6 +248,12 @@ func deployServices(
 				// service update.
 				serviceSpec.TaskTemplate.ContainerSpec.Image = service.Spec.TaskTemplate.ContainerSpec.Image
 			}
+
+			// Stack deploy does not have a `--force` option. Preserve existing ForceUpdate
+			// value so that tasks are not re-deployed if not updated.
+			// TODO move this to API client?
+			serviceSpec.TaskTemplate.ForceUpdate = service.Spec.TaskTemplate.ForceUpdate
+
 			response, err := apiClient.ServiceUpdate(
 				ctx,
 				service.ID,

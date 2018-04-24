@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/mount"
+	"github.com/gotestyourself/gotestyourself/skip"
 )
 
 func TestGetAddress(t *testing.T) {
@@ -30,11 +31,8 @@ func TestGetAddress(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	// TODO Windows: Investigate why this test fails on Windows under CI
-	//               but passes locally.
-	if runtime.GOOS == "windows" {
-		t.Skip("Test failing on Windows CI")
-	}
+	skip.If(t, runtime.GOOS == "windows", "FIXME: investigate why this test fails on CI")
+	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	rootDir, err := ioutil.TempDir("", "local-volume-test")
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +75,7 @@ func TestRemove(t *testing.T) {
 }
 
 func TestInitializeWithVolumes(t *testing.T) {
+	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	rootDir, err := ioutil.TempDir("", "local-volume-test")
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +108,7 @@ func TestInitializeWithVolumes(t *testing.T) {
 }
 
 func TestCreate(t *testing.T) {
+	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	rootDir, err := ioutil.TempDir("", "local-volume-test")
 	if err != nil {
 		t.Fatal(err)
@@ -181,9 +181,8 @@ func TestValidateName(t *testing.T) {
 }
 
 func TestCreateWithOpts(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip()
-	}
+	skip.If(t, runtime.GOOS == "windows")
+	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	rootDir, err := ioutil.TempDir("", "local-volume-test")
 	if err != nil {
 		t.Fatal(err)
@@ -215,33 +214,27 @@ func TestCreateWithOpts(t *testing.T) {
 		}
 	}()
 
-	mountInfos, err := mount.GetMounts()
+	mountInfos, err := mount.GetMounts(mount.SingleEntryFilter(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	var found bool
-	for _, info := range mountInfos {
-		if info.Mountpoint == dir {
-			found = true
-			if info.Fstype != "tmpfs" {
-				t.Fatalf("expected tmpfs mount, got %q", info.Fstype)
-			}
-			if info.Source != "tmpfs" {
-				t.Fatalf("expected tmpfs mount, got %q", info.Source)
-			}
-			if !strings.Contains(info.VfsOpts, "uid=1000") {
-				t.Fatalf("expected mount info to have uid=1000: %q", info.VfsOpts)
-			}
-			if !strings.Contains(info.VfsOpts, "size=1024k") {
-				t.Fatalf("expected mount info to have size=1024k: %q", info.VfsOpts)
-			}
-			break
-		}
+	if len(mountInfos) != 1 {
+		t.Fatalf("expected 1 mount, found %d: %+v", len(mountInfos), mountInfos)
 	}
 
-	if !found {
-		t.Fatal("mount not found")
+	info := mountInfos[0]
+	t.Logf("%+v", info)
+	if info.Fstype != "tmpfs" {
+		t.Fatalf("expected tmpfs mount, got %q", info.Fstype)
+	}
+	if info.Source != "tmpfs" {
+		t.Fatalf("expected tmpfs mount, got %q", info.Source)
+	}
+	if !strings.Contains(info.VfsOpts, "uid=1000") {
+		t.Fatalf("expected mount info to have uid=1000: %q", info.VfsOpts)
+	}
+	if !strings.Contains(info.VfsOpts, "size=1024k") {
+		t.Fatalf("expected mount info to have size=1024k: %q", info.VfsOpts)
 	}
 
 	if v.active.count != 1 {
@@ -286,7 +279,8 @@ func TestCreateWithOpts(t *testing.T) {
 	}
 }
 
-func TestRealodNoOpts(t *testing.T) {
+func TestRelaodNoOpts(t *testing.T) {
+	skip.If(t, os.Getuid() != 0, "skipping test that requires root")
 	rootDir, err := ioutil.TempDir("", "volume-test-reload-no-opts")
 	if err != nil {
 		t.Fatal(err)

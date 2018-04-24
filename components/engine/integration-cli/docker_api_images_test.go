@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,9 +12,8 @@ import (
 	"github.com/docker/docker/integration-cli/checker"
 	"github.com/docker/docker/integration-cli/cli"
 	"github.com/docker/docker/integration-cli/cli/build"
-	"github.com/docker/docker/integration-cli/request"
+	"github.com/docker/docker/internal/test/request"
 	"github.com/go-check/check"
-	"golang.org/x/net/context"
 )
 
 func (s *DockerSuite) TestAPIImagesFilter(c *check.C) {
@@ -115,7 +115,14 @@ func (s *DockerSuite) TestAPIImagesHistory(c *check.C) {
 	c.Assert(err, checker.IsNil)
 
 	c.Assert(historydata, checker.Not(checker.HasLen), 0)
-	c.Assert(historydata[0].Tags[0], checker.Equals, "test-api-images-history:latest")
+	var found bool
+	for _, tag := range historydata[0].Tags {
+		if tag == "test-api-images-history:latest" {
+			found = true
+			break
+		}
+	}
+	c.Assert(found, checker.True)
 }
 
 func (s *DockerSuite) TestAPIImagesImportBadSrc(c *check.C) {
