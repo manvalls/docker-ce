@@ -2,7 +2,6 @@ package instructions // import "github.com/docker/docker/builder/dockerfile/inst
 
 import (
 	"errors"
-
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -110,17 +109,37 @@ type MaintainerCommand struct {
 	Maintainer string
 }
 
+// NewLabelCommand creates a new 'LABEL' command
+func NewLabelCommand(k string, v string, NoExp bool) *LabelCommand {
+	kvp := KeyValuePair{Key: k, Value: v}
+	c := "LABEL "
+	c += kvp.String()
+	nc := withNameAndCode{code: c, name: "label"}
+	cmd := &LabelCommand{
+		withNameAndCode: nc,
+		Labels: KeyValuePairs{
+			kvp,
+		},
+		noExpand: NoExp,
+	}
+	return cmd
+}
+
 // LabelCommand : LABEL some json data describing the image
 //
 // Sets the Label variable foo to bar,
 //
 type LabelCommand struct {
 	withNameAndCode
-	Labels KeyValuePairs // kvp slice instead of map to preserve ordering
+	Labels   KeyValuePairs // kvp slice instead of map to preserve ordering
+	noExpand bool
 }
 
 // Expand variables
 func (c *LabelCommand) Expand(expander SingleWordExpander) error {
+	if c.noExpand {
+		return nil
+	}
 	return expandKvpsInPlace(c.Labels, expander)
 }
 
@@ -390,7 +409,8 @@ func CurrentStage(s []Stage) (*Stage, error) {
 // HasStage looks for the presence of a given stage name
 func HasStage(s []Stage, name string) (int, bool) {
 	for i, stage := range s {
-		if stage.Name == name {
+		// Stage name is case-insensitive by design
+		if strings.EqualFold(stage.Name, name) {
 			return i, true
 		}
 	}

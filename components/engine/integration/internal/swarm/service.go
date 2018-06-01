@@ -22,7 +22,7 @@ func ServicePoll(config *poll.Settings) {
 	config.Timeout = 30 * time.Second
 	config.Delay = 100 * time.Millisecond
 	if runtime.GOARCH == "arm64" || runtime.GOARCH == "arm" {
-		config.Timeout = 1 * time.Minute
+		config.Timeout = 90 * time.Second
 	}
 }
 
@@ -50,7 +50,7 @@ func ContainerPoll(config *poll.Settings) {
 // NewSwarm creates a swarm daemon for testing
 func NewSwarm(t *testing.T, testEnv *environment.Execution, ops ...func(*daemon.Daemon)) *daemon.Daemon {
 	t.Helper()
-	skip.IfCondition(t, testEnv.IsRemoteDaemon())
+	skip.If(t, testEnv.IsRemoteDaemon)
 	if testEnv.DaemonInfo.ExperimentalBuild {
 		ops = append(ops, daemon.WithExperimental)
 	}
@@ -133,6 +133,21 @@ func ServiceWithReplicas(n uint64) ServiceSpecOpt {
 func ServiceWithName(name string) ServiceSpecOpt {
 	return func(spec *swarmtypes.ServiceSpec) {
 		spec.Annotations.Name = name
+	}
+}
+
+// ServiceWithNetwork sets the network of the service
+func ServiceWithNetwork(network string) ServiceSpecOpt {
+	return func(spec *swarmtypes.ServiceSpec) {
+		spec.TaskTemplate.Networks = append(spec.TaskTemplate.Networks,
+			swarmtypes.NetworkAttachmentConfig{Target: network})
+	}
+}
+
+// ServiceWithEndpoint sets the Endpoint of the service
+func ServiceWithEndpoint(endpoint *swarmtypes.EndpointSpec) ServiceSpecOpt {
+	return func(spec *swarmtypes.ServiceSpec) {
+		spec.EndpointSpec = endpoint
 	}
 }
 

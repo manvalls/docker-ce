@@ -6,9 +6,10 @@ import (
 
 	"github.com/docker/docker/builder/dockerfile/instructions"
 	"github.com/docker/docker/builder/remotecontext"
-	"github.com/docker/docker/internal/testutil"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/reexec"
+	"github.com/gotestyourself/gotestyourself/assert"
+	is "github.com/gotestyourself/gotestyourself/assert/cmp"
 	"github.com/gotestyourself/gotestyourself/skip"
 )
 
@@ -137,7 +138,7 @@ func executeTestCase(t *testing.T, testCase dispatchTestCase) {
 	}()
 
 	b := newBuilderWithMockBackend()
-	sb := newDispatchRequest(b, '`', context, newBuildArgs(make(map[string]*string)), newStagesBuildResults())
+	sb := newDispatchRequest(b, '`', context, NewBuildArgs(make(map[string]*string)), newStagesBuildResults())
 	err = dispatch(sb, testCase.cmd)
-	testutil.ErrorContains(t, err, testCase.expectedError)
+	assert.Check(t, is.ErrorContains(err, testCase.expectedError))
 }

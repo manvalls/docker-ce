@@ -406,7 +406,8 @@ func (s *DockerSuite) TestBuildAddRemoteNoDecompress(c *check.C) {
 }
 
 func (s *DockerSuite) TestBuildChownOnCopy(c *check.C) {
-	testRequires(c, DaemonIsLinux)
+	// new feature added in 1.31 - https://github.com/moby/moby/pull/34263
+	testRequires(c, DaemonIsLinux, MinimumAPIVersion("1.31"))
 	dockerfile := `FROM busybox
 		RUN echo 'test1:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 		RUN echo 'test1:x:1001:' >> /etc/group
@@ -542,7 +543,7 @@ type buildLine struct {
 }
 
 func getImageIDsFromBuild(c *check.C, output []byte) []string {
-	ids := []string{}
+	var ids []string
 	for _, line := range bytes.Split(output, []byte("\n")) {
 		if len(line) == 0 {
 			continue

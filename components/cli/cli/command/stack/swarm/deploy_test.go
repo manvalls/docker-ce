@@ -1,15 +1,16 @@
 package swarm
 
 import (
+	"context"
 	"testing"
 
+	"github.com/docker/cli/cli/command/stack/options"
 	"github.com/docker/cli/cli/compose/convert"
 	"github.com/docker/cli/internal/test"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/gotestyourself/gotestyourself/assert"
 	is "github.com/gotestyourself/gotestyourself/assert/cmp"
-	"golang.org/x/net/context"
 )
 
 func TestPruneServices(t *testing.T) {
@@ -24,6 +25,15 @@ func TestPruneServices(t *testing.T) {
 
 	pruneServices(ctx, dockerCli, namespace, services)
 	assert.Check(t, is.DeepEqual(buildObjectIDs([]string{objectName("foo", "remove")}), client.removedServices))
+}
+
+func TestDeployWithEmptyName(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeClient{}
+	dockerCli := test.NewFakeCli(client)
+
+	err := deployCompose(ctx, dockerCli, options.Deploy{Namespace: "'   '", Prune: true})
+	assert.Check(t, is.Error(err, `invalid stack name: "'   '"`))
 }
 
 // TestServiceUpdateResolveImageChanged tests that the service's

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +33,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/context"
 )
 
 type buildOptions struct {
@@ -412,9 +412,9 @@ func runBuild(dockerCli command.Cli, options buildOptions) error {
 	defer response.Body.Close()
 
 	imageID := ""
-	aux := func(auxJSON *json.RawMessage) {
+	aux := func(m jsonmessage.JSONMessage) {
 		var result types.BuildResult
-		if err := json.Unmarshal(*auxJSON, &result); err != nil {
+		if err := json.Unmarshal(*m.Aux, &result); err != nil {
 			fmt.Fprintf(dockerCli.Err(), "Failed to parse aux message: %s", err)
 		} else {
 			imageID = result.ID
