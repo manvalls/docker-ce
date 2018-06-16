@@ -118,7 +118,7 @@ func (image *Image) Size(ctx context.Context, provider content.Provider, platfor
 		}
 		size += desc.Size
 		return nil, nil
-	}), FilterPlatform(platform, ChildrenHandler(provider))), image.Target)
+	}), FilterPlatforms(ChildrenHandler(provider), platform)), image.Target)
 }
 
 // Manifest resolves a manifest from the image for the given platform.
@@ -131,19 +131,19 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
 	var (
 		matcher platforms.Matcher
 		m       *ocispec.Manifest
-		err     error
 	)
 	if platform != "" {
-		matcher, err = platforms.Parse(platform)
+		p, err := platforms.Parse(platform)
 		if err != nil {
 			return ocispec.Manifest{}, err
 		}
+		matcher = platforms.NewMatcher(p)
 	}
 
 	if err := Walk(ctx, HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
 		switch desc.MediaType {
 		case MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
-			p, err := content.ReadBlob(ctx, provider, desc.Digest)
+			p, err := content.ReadBlob(ctx, provider, desc)
 			if err != nil {
 				return nil, err
 			}
@@ -159,7 +159,7 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
 				}
 
 				if desc.Platform == nil {
-					p, err := content.ReadBlob(ctx, provider, manifest.Config.Digest)
+					p, err := content.ReadBlob(ctx, provider, manifest.Config)
 					if err != nil {
 						return nil, err
 					}
@@ -180,7 +180,7 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
 
 			return nil, nil
 		case MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
-			p, err := content.ReadBlob(ctx, provider, desc.Digest)
+			p, err := content.ReadBlob(ctx, provider, desc)
 			if err != nil {
 				return nil, err
 			}
@@ -240,7 +240,7 @@ func Platforms(ctx context.Context, provider content.Provider, image ocispec.Des
 
 		switch desc.MediaType {
 		case MediaTypeDockerSchema2Config, ocispec.MediaTypeImageConfig:
-			p, err := content.ReadBlob(ctx, provider, desc.Digest)
+			p, err := content.ReadBlob(ctx, provider, desc)
 			if err != nil {
 				return nil, err
 			}
@@ -279,11 +279,11 @@ func Check(ctx context.Context, provider content.Provider, image ocispec.Descrip
 
 	// TODO(stevvooe): It is possible that referenced conponents could have
 	// children, but this is rare. For now, we ignore this and only verify
-	// that manfiest components are present.
+	// that manifest components are present.
 	required = append([]ocispec.Descriptor{mfst.Config}, mfst.Layers...)
 
 	for _, desc := range required {
-		ra, err := provider.ReaderAt(ctx, desc.Digest)
+		ra, err := provider.ReaderAt(ctx, desc)
 		if err != nil {
 			if errdefs.IsNotFound(err) {
 				missing = append(missing, desc)
@@ -305,7 +305,7 @@ func Children(ctx context.Context, provider content.Provider, desc ocispec.Descr
 	var descs []ocispec.Descriptor
 	switch desc.MediaType {
 	case MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
-		p, err := content.ReadBlob(ctx, provider, desc.Digest)
+		p, err := content.ReadBlob(ctx, provider, desc)
 		if err != nil {
 			return nil, err
 		}
@@ -320,7 +320,7 @@ func Children(ctx context.Context, provider content.Provider, desc ocispec.Descr
 		descs = append(descs, manifest.Config)
 		descs = append(descs, manifest.Layers...)
 	case MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
-		p, err := content.ReadBlob(ctx, provider, desc.Digest)
+		p, err := content.ReadBlob(ctx, provider, desc)
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +351,7 @@ func Children(ctx context.Context, provider content.Provider, desc ocispec.Descr
 // These are used to verify that a set of layers unpacked to the expected
 // values.
 func RootFS(ctx context.Context, provider content.Provider, configDesc ocispec.Descriptor) ([]digest.Digest, error) {
-	p, err := content.ReadBlob(ctx, provider, configDesc.Digest)
+	p, err := content.ReadBlob(ctx, provider, configDesc)
 	if err != nil {
 		return nil, err
 	}

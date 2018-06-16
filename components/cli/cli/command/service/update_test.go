@@ -12,8 +12,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	mounttypes "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/gotestyourself/gotestyourself/assert"
-	is "github.com/gotestyourself/gotestyourself/assert/cmp"
+	"gotest.tools/assert"
+	is "gotest.tools/assert/cmp"
 )
 
 func TestUpdateServiceArgs(t *testing.T) {
@@ -545,6 +545,32 @@ func TestUpdateReadOnly(t *testing.T) {
 	flags.Set("read-only", "false")
 	updateService(nil, nil, flags, spec)
 	assert.Check(t, !cspec.ReadOnly)
+}
+
+func TestUpdateInit(t *testing.T) {
+	spec := &swarm.ServiceSpec{
+		TaskTemplate: swarm.TaskSpec{
+			ContainerSpec: &swarm.ContainerSpec{},
+		},
+	}
+	cspec := spec.TaskTemplate.ContainerSpec
+
+	// Update with --init=true
+	flags := newUpdateCommand(nil).Flags()
+	flags.Set("init", "true")
+	updateService(nil, nil, flags, spec)
+	assert.Check(t, is.Equal(true, *cspec.Init))
+
+	// Update without --init, no change
+	flags = newUpdateCommand(nil).Flags()
+	updateService(nil, nil, flags, spec)
+	assert.Check(t, is.Equal(true, *cspec.Init))
+
+	// Update with --init=false
+	flags = newUpdateCommand(nil).Flags()
+	flags.Set("init", "false")
+	updateService(nil, nil, flags, spec)
+	assert.Check(t, is.Equal(false, *cspec.Init))
 }
 
 func TestUpdateStopSignal(t *testing.T) {

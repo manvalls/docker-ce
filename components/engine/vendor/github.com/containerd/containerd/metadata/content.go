@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/metadata/boltutil"
 	"github.com/containerd/containerd/namespaces"
 	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
@@ -226,14 +227,16 @@ func (cs *contentStore) ListStatuses(ctx context.Context, fs ...string) ([]conte
 
 	brefs := map[string]string{}
 	if err := view(ctx, cs.db, func(tx *bolt.Tx) error {
-		bkt := getIngestBucket(tx, ns)
+		bkt := getIngestsBucket(tx, ns)
 		if bkt == nil {
 			return nil
 		}
 
 		return bkt.ForEach(func(k, v []byte) error {
-			// TODO(dmcgowan): match name and potentially labels here
-			brefs[string(k)] = string(v)
+			if v == nil {
+				// TODO(dmcgowan): match name and potentially labels here
+				brefs[string(k)] = string(bkt.Bucket(k).Get(bucketKeyRef))
+			}
 			return nil
 		})
 	}); err != nil {
@@ -261,11 +264,11 @@ func (cs *contentStore) ListStatuses(ctx context.Context, fs ...string) ([]conte
 }
 
 func getRef(tx *bolt.Tx, ns, ref string) string {
-	bkt := getIngestBucket(tx, ns)
+	bkt := getIngestBucket(tx, ns, ref)
 	if bkt == nil {
 		return ""
 	}
-	v := bkt.Get([]byte(ref))
+	v := bkt.Get(bucketKeyRef)
 	if len(v) == 0 {
 		return ""
 	}
@@ -308,24 +311,45 @@ func (cs *contentStore) Abort(ctx context.Context, ref string) error {
 	defer cs.l.RUnlock()
 
 	return update(ctx, cs.db, func(tx *bolt.Tx) error {
-		bkt := getIngestBucket(tx, ns)
+		ibkt := getIngestsBucket(tx, ns)
+		if ibkt == nil {
+			return errors.Wrapf(errdefs.ErrNotFound, "reference %v", ref)
+		}
+		bkt := ibkt.Bucket([]byte(ref))
 		if bkt == nil {
 			return errors.Wrapf(errdefs.ErrNotFound, "reference %v", ref)
 		}
-		bref := string(bkt.Get([]byte(ref)))
+		bref := string(bkt.Get(bucketKeyRef))
 		if bref == "" {
 			return errors.Wrapf(errdefs.ErrNotFound, "reference %v", ref)
 		}
-		if err := bkt.Delete([]byte(ref)); err != nil {
+		expected := string(bkt.Get(bucketKeyExpected))
+		if err := ibkt.DeleteBucket([]byte(ref)); err != nil {
 			return err
 		}
 
-		return cs.Store.Abort(ctx, bref)
+		// if not shared content, delete active ingest on backend
+		if expected == "" {
+			return cs.Store.Abort(ctx, bref)
+		}
+
+		return nil
 	})
 
 }
 
-func (cs *contentStore) Writer(ctx context.Context, ref string, size int64, expected digest.Digest) (content.Writer, error) {
+func (cs *contentStore) Writer(ctx context.Context, opts ...content.WriterOpt) (content.Writer, error) {
+	var wOpts content.WriterOpts
+	for _, opt := range opts {
+		if err := opt(&wOpts); err != nil {
+			return nil, err
+		}
+	}
+	// TODO(AkihiroSuda): we could create a random string or one calculated based on the context
+	// https://github.com/containerd/containerd/issues/2129#issuecomment-380255019
+	if wOpts.Ref == "" {
+		return nil, errors.Wrap(errdefs.ErrInvalidArgument, "ref must not be empty")
+	}
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return nil, err
@@ -337,14 +361,16 @@ func (cs *contentStore) Writer(ctx context.Context, ref string, size int64, expe
 	var (
 		w      content.Writer
 		exists bool
+		bref   string
 	)
 	if err := update(ctx, cs.db, func(tx *bolt.Tx) error {
-		if expected != "" {
-			cbkt := getBlobBucket(tx, ns, expected)
+		var shared bool
+		if wOpts.Desc.Digest != "" {
+			cbkt := getBlobBucket(tx, ns, wOpts.Desc.Digest)
 			if cbkt != nil {
 				// Add content to lease to prevent other reference removals
 				// from effecting this object during a provided lease
-				if err := addContentLease(ctx, tx, expected); err != nil {
+				if err := addContentLease(ctx, tx, wOpts.Desc.Digest); err != nil {
 					return errors.Wrap(err, "unable to lease content")
 				}
 				// Return error outside of transaction to ensure
@@ -352,65 +378,154 @@ func (cs *contentStore) Writer(ctx context.Context, ref string, size int64, expe
 				exists = true
 				return nil
 			}
+
+			if st, err := cs.Store.Info(ctx, wOpts.Desc.Digest); err == nil {
+				// Ensure the expected size is the same, it is likely
+				// an error if the size is mismatched but the caller
+				// must resolve this on commit
+				if wOpts.Desc.Size == 0 || wOpts.Desc.Size == st.Size {
+					shared = true
+					wOpts.Desc.Size = st.Size
+				}
+			}
 		}
 
-		bkt, err := createIngestBucket(tx, ns)
+		bkt, err := createIngestBucket(tx, ns, wOpts.Ref)
 		if err != nil {
 			return err
 		}
 
-		var (
-			bref  string
-			brefb = bkt.Get([]byte(ref))
-		)
-
+		brefb := bkt.Get(bucketKeyRef)
 		if brefb == nil {
 			sid, err := bkt.NextSequence()
 			if err != nil {
 				return err
 			}
 
-			bref = createKey(sid, ns, ref)
-			if err := bkt.Put([]byte(ref), []byte(bref)); err != nil {
+			bref = createKey(sid, ns, wOpts.Ref)
+			if err := bkt.Put(bucketKeyRef, []byte(bref)); err != nil {
 				return err
 			}
 		} else {
 			bref = string(brefb)
 		}
 
-		// Do not use the passed in expected value here since it was
-		// already checked against the user metadata. If the content
-		// store has the content, it must still be written before
-		// linked into the given namespace. It is possible in the future
-		// to allow content which exists in content store but not
-		// namespace to be linked here and returned an exist error, but
-		// this would require more configuration to make secure.
-		w, err = cs.Store.Writer(ctx, bref, size, "")
+		if shared {
+			if err := bkt.Put(bucketKeyExpected, []byte(wOpts.Desc.Digest)); err != nil {
+				return err
+			}
+		} else {
+			// Do not use the passed in expected value here since it was
+			// already checked against the user metadata. The content must
+			// be committed in the namespace before it will be seen as
+			// available in the current namespace.
+			desc := wOpts.Desc
+			desc.Digest = ""
+			w, err = cs.Store.Writer(ctx, content.WithRef(bref), content.WithDescriptor(desc))
+		}
 		return err
 	}); err != nil {
 		return nil, err
 	}
 	if exists {
-		return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "content %v", expected)
+		return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "content %v", wOpts.Desc.Digest)
 	}
 
-	// TODO: keep the expected in the writer to use on commit
-	// when no expected is provided there.
 	return &namespacedWriter{
-		Writer:    w,
-		ref:       ref,
+		ctx:       ctx,
+		ref:       wOpts.Ref,
 		namespace: ns,
 		db:        cs.db,
+		provider:  cs.Store,
 		l:         &cs.l,
+		w:         w,
+		bref:      bref,
+		started:   time.Now(),
+		desc:      wOpts.Desc,
 	}, nil
 }
 
 type namespacedWriter struct {
-	content.Writer
+	ctx       context.Context
 	ref       string
 	namespace string
 	db        transactor
-	l         *sync.RWMutex
+	provider  interface {
+		content.Provider
+		content.Ingester
+	}
+	l *sync.RWMutex
+
+	w content.Writer
+
+	bref    string
+	started time.Time
+	desc    ocispec.Descriptor
+}
+
+func (nw *namespacedWriter) Close() error {
+	if nw.w != nil {
+		return nw.w.Close()
+	}
+	return nil
+}
+
+func (nw *namespacedWriter) Write(p []byte) (int, error) {
+	// if no writer, first copy and unshare before performing write
+	if nw.w == nil {
+		if len(p) == 0 {
+			return 0, nil
+		}
+
+		if err := nw.createAndCopy(nw.ctx, nw.desc); err != nil {
+			return 0, err
+		}
+	}
+
+	return nw.w.Write(p)
+}
+
+func (nw *namespacedWriter) Digest() digest.Digest {
+	if nw.w != nil {
+		return nw.w.Digest()
+	}
+	return nw.desc.Digest
+}
+
+func (nw *namespacedWriter) Truncate(size int64) error {
+	if nw.w != nil {
+		return nw.w.Truncate(size)
+	}
+	desc := nw.desc
+	desc.Size = size
+	desc.Digest = ""
+	return nw.createAndCopy(nw.ctx, desc)
+}
+
+func (nw *namespacedWriter) createAndCopy(ctx context.Context, desc ocispec.Descriptor) error {
+	nwDescWithoutDigest := desc
+	nwDescWithoutDigest.Digest = ""
+	w, err := nw.provider.Writer(ctx, content.WithRef(nw.bref), content.WithDescriptor(nwDescWithoutDigest))
+	if err != nil {
+		return err
+	}
+
+	if desc.Size > 0 {
+		ra, err := nw.provider.ReaderAt(ctx, nw.desc)
+		if err != nil {
+			return err
+		}
+		defer ra.Close()
+
+		if err := content.CopyReaderAt(w, ra, desc.Size); err != nil {
+			nw.w.Close()
+			nw.w = nil
+			return err
+		}
+	}
+	nw.w = w
+
+	return nil
 }
 
 func (nw *namespacedWriter) Commit(ctx context.Context, size int64, expected digest.Digest, opts ...content.Opt) error {
@@ -418,9 +533,9 @@ func (nw *namespacedWriter) Commit(ctx context.Context, size int64, expected dig
 	defer nw.l.RUnlock()
 
 	return update(ctx, nw.db, func(tx *bolt.Tx) error {
-		bkt := getIngestBucket(tx, nw.namespace)
+		bkt := getIngestsBucket(tx, nw.namespace)
 		if bkt != nil {
-			if err := bkt.Delete([]byte(nw.ref)); err != nil {
+			if err := bkt.DeleteBucket([]byte(nw.ref)); err != nil && err != bolt.ErrBucketNotFound {
 				return err
 			}
 		}
@@ -443,23 +558,37 @@ func (nw *namespacedWriter) commit(ctx context.Context, tx *bolt.Tx, size int64,
 		return "", err
 	}
 
-	status, err := nw.Writer.Status()
-	if err != nil {
-		return "", err
-	}
-	if size != 0 && size != status.Offset {
-		return "", errors.Errorf("%q failed size validation: %v != %v", nw.ref, status.Offset, size)
-	}
-	size = status.Offset
-
-	actual := nw.Writer.Digest()
-
-	if err := nw.Writer.Commit(ctx, size, expected); err != nil {
-		if !errdefs.IsAlreadyExists(err) {
-			return "", err
+	var actual digest.Digest
+	if nw.w == nil {
+		if size != 0 && size != nw.desc.Size {
+			return "", errors.Errorf("%q failed size validation: %v != %v", nw.ref, nw.desc.Size, size)
 		}
+		if expected != "" && expected != nw.desc.Digest {
+			return "", errors.Errorf("%q unexpected digest", nw.ref)
+		}
+		size = nw.desc.Size
+		actual = nw.desc.Digest
 		if getBlobBucket(tx, nw.namespace, actual) != nil {
 			return "", errors.Wrapf(errdefs.ErrAlreadyExists, "content %v", actual)
+		}
+	} else {
+		status, err := nw.w.Status()
+		if err != nil {
+			return "", err
+		}
+		if size != 0 && size != status.Offset {
+			return "", errors.Errorf("%q failed size validation: %v != %v", nw.ref, status.Offset, size)
+		}
+		size = status.Offset
+		actual = nw.w.Digest()
+
+		if err := nw.w.Commit(ctx, size, expected); err != nil {
+			if !errdefs.IsAlreadyExists(err) {
+				return "", err
+			}
+			if getBlobBucket(tx, nw.namespace, actual) != nil {
+				return "", errors.Wrapf(errdefs.ErrAlreadyExists, "content %v", actual)
+			}
 		}
 	}
 
@@ -484,19 +613,27 @@ func (nw *namespacedWriter) commit(ctx context.Context, tx *bolt.Tx, size int64,
 	return actual, bkt.Put(bucketKeySize, sizeEncoded)
 }
 
-func (nw *namespacedWriter) Status() (content.Status, error) {
-	st, err := nw.Writer.Status()
+func (nw *namespacedWriter) Status() (st content.Status, err error) {
+	if nw.w != nil {
+		st, err = nw.w.Status()
+	} else {
+		st.Offset = nw.desc.Size
+		st.Total = nw.desc.Size
+		st.StartedAt = nw.started
+		st.UpdatedAt = nw.started
+		st.Expected = nw.desc.Digest
+	}
 	if err == nil {
 		st.Ref = nw.ref
 	}
-	return st, err
+	return
 }
 
-func (cs *contentStore) ReaderAt(ctx context.Context, dgst digest.Digest) (content.ReaderAt, error) {
-	if err := cs.checkAccess(ctx, dgst); err != nil {
+func (cs *contentStore) ReaderAt(ctx context.Context, desc ocispec.Descriptor) (content.ReaderAt, error) {
+	if err := cs.checkAccess(ctx, desc.Digest); err != nil {
 		return nil, err
 	}
-	return cs.Store.ReaderAt(ctx, dgst)
+	return cs.Store.ReaderAt(ctx, desc)
 }
 
 func (cs *contentStore) checkAccess(ctx context.Context, dgst digest.Digest) error {
@@ -590,13 +727,30 @@ func (cs *contentStore) garbageCollect(ctx context.Context) (d time.Duration, er
 				continue
 			}
 			bbkt := cbkt.Bucket(bucketKeyObjectBlob)
-			if err := bbkt.ForEach(func(ck, cv []byte) error {
-				if cv == nil {
-					seen[string(ck)] = struct{}{}
+			if bbkt != nil {
+				if err := bbkt.ForEach(func(ck, cv []byte) error {
+					if cv == nil {
+						seen[string(ck)] = struct{}{}
+					}
+					return nil
+				}); err != nil {
+					return err
 				}
-				return nil
-			}); err != nil {
-				return err
+			}
+
+			ibkt := cbkt.Bucket(bucketKeyObjectIngests)
+			if ibkt != nil {
+				if err := ibkt.ForEach(func(ref, v []byte) error {
+					if v == nil {
+						expected := ibkt.Bucket(ref).Get(bucketKeyExpected)
+						if len(expected) > 0 {
+							seen[string(expected)] = struct{}{}
+						}
+					}
+					return nil
+				}); err != nil {
+					return err
+				}
 			}
 		}
 
