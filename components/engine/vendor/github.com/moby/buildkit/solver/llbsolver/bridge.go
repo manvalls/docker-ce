@@ -15,19 +15,25 @@ import (
 	"github.com/moby/buildkit/util/tracing"
 	"github.com/moby/buildkit/worker"
 	digest "github.com/opencontainers/go-digest"
+	specs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
 type llbBridge struct {
-	builder       solver.Builder
-	frontends     map[string]frontend.Frontend
-	resolveWorker func() (worker.Worker, error)
-	ci            *remotecache.CacheImporter
-	cms           map[string]solver.CacheManager
-	cmsMu         sync.Mutex
+	builder              solver.Builder
+	frontends            map[string]frontend.Frontend
+	resolveWorker        func() (worker.Worker, error)
+	resolveCacheImporter remotecache.ResolveCacheImporterFunc
+	cms                  map[string]solver.CacheManager
+	cmsMu                sync.Mutex
+	platforms            []specs.Platform
 }
 
-func (b *llbBridge) Solve(ctx context.Context, req frontend.SolveRequest) (res solver.CachedResult, exp map[string][]byte, err error) {
+func (b *llbBridge) Solve(ctx context.Context, req frontend.SolveRequest) (res *frontend.Result, err error) {
+	w, err := b.resolveWorker()
+	if err != nil {
+		return nil, err
+	}
 	var cms []solver.CacheManager
 	for _, ref := range req.ImportCacheRefs {
 		b.cmsMu.Lock()
@@ -35,14 +41,22 @@ func (b *llbBridge) Solve(ctx context.Context, req frontend.SolveRequest) (res s
 		if prevCm, ok := b.cms[ref]; !ok {
 			r, err := reference.ParseNormalizedNamed(ref)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			ref = reference.TagNameOnly(r).String()
 			func(ref string) {
 				cm = newLazyCacheManager(ref, func() (solver.CacheManager, error) {
 					var cmNew solver.CacheManager
 					if err := b.builder.Call(ctx, "importing cache manifest from "+ref, func(ctx context.Context) error {
-						cmNew, err = b.ci.Resolve(ctx, ref)
+						if b.resolveCacheImporter == nil {
+							return errors.New("no cache importer is available")
+						}
+						typ := "" // TODO: support non-registry type
+						ci, desc, err := b.resolveCacheImporter(ctx, typ, ref)
+						if err != nil {
+							return err
+						}
+						cmNew, err = ci.Resolve(ctx, desc, ref, w)
 						return err
 					}); err != nil {
 						return nil, err
@@ -59,40 +73,45 @@ func (b *llbBridge) Solve(ctx context.Context, req frontend.SolveRequest) (res s
 	}
 
 	if req.Definition != nil && req.Definition.Def != nil {
-		edge, err := Load(req.Definition, WithCacheSources(cms))
+		edge, err := Load(req.Definition, WithCacheSources(cms), RuntimePlatforms(b.platforms))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		res, err = b.builder.Build(ctx, edge)
+		ref, err := b.builder.Build(ctx, edge)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
+
+		res = &frontend.Result{Ref: ref}
 	}
 	if req.Frontend != "" {
 		f, ok := b.frontends[req.Frontend]
 		if !ok {
-			return nil, nil, errors.Errorf("invalid frontend: %s", req.Frontend)
+			return nil, errors.Errorf("invalid frontend: %s", req.Frontend)
 		}
-		res, exp, err = f.Solve(ctx, b, req.FrontendOpt)
+		res, err = f.Solve(ctx, b, req.FrontendOpt)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	} else {
 		if req.Definition == nil || req.Definition.Def == nil {
-			return nil, nil, nil
+			return &frontend.Result{}, nil
 		}
 	}
 
-	if res != nil {
-		wr, ok := res.Sys().(*worker.WorkerRef)
+	if err := res.EachRef(func(r solver.CachedResult) error {
+		wr, ok := r.Sys().(*worker.WorkerRef)
 		if !ok {
-			return nil, nil, errors.Errorf("invalid reference for exporting: %T", res.Sys())
+			return errors.Errorf("invalid reference for exporting: %T", r.Sys())
 		}
 		if wr.ImmutableRef != nil {
-			if err := wr.ImmutableRef.Finalize(ctx); err != nil {
-				return nil, nil, err
+			if err := wr.ImmutableRef.Finalize(ctx, false); err != nil {
+				return err
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return
 }
@@ -108,12 +127,12 @@ func (s *llbBridge) Exec(ctx context.Context, meta executor.Meta, root cache.Imm
 	return err
 }
 
-func (s *llbBridge) ResolveImageConfig(ctx context.Context, ref string) (digest.Digest, []byte, error) {
+func (s *llbBridge) ResolveImageConfig(ctx context.Context, ref string, platform *specs.Platform) (digest.Digest, []byte, error) {
 	w, err := s.resolveWorker()
 	if err != nil {
 		return "", nil, err
 	}
-	return w.ResolveImageConfig(ctx, ref)
+	return w.ResolveImageConfig(ctx, ref, platform)
 }
 
 type lazyCacheManager struct {

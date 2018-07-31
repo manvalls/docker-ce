@@ -150,7 +150,8 @@ func (b *Builder) exportImage(state *dispatchState, layer builder.RWLayer, paren
 	return nil
 }
 
-func (b *Builder) performCopy(state *dispatchState, inst copyInstruction) error {
+func (b *Builder) performCopy(req dispatchRequest, inst copyInstruction) error {
+	state := req.state
 	srcHash := getSourceHashFromInfos(inst.infos)
 
 	var chownComment string
@@ -168,7 +169,7 @@ func (b *Builder) performCopy(state *dispatchState, inst copyInstruction) error 
 		return err
 	}
 
-	imageMount, err := b.imageSources.Get(state.imageID, true, state.operatingSystem)
+	imageMount, err := b.imageSources.Get(state.imageID, true, req.builder.platform)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get destination image %q", state.imageID)
 	}
@@ -342,6 +343,18 @@ func withEntrypointOverride(cmd []string, entrypoint []string) runConfigModifier
 	}
 }
 
+// withoutHealthcheck disables healthcheck.
+//
+// The dockerfile RUN instruction expect to run without healthcheck
+// so the runConfig Healthcheck needs to be disabled.
+func withoutHealthcheck() runConfigModifier {
+	return func(runConfig *container.Config) {
+		runConfig.Healthcheck = &container.HealthConfig{
+			Test: []string{"NONE"},
+		}
+	}
+}
+
 func copyRunConfig(runConfig *container.Config, modifiers ...runConfigModifier) *container.Config {
 	copy := *runConfig
 	copy.Cmd = copyStringSlice(runConfig.Cmd)
@@ -415,7 +428,9 @@ func (b *Builder) probeAndCreate(dispatchState *dispatchState, runConfig *contai
 
 func (b *Builder) create(runConfig *container.Config) (string, error) {
 	logrus.Debugf("[BUILDER] Command to be executed: %v", runConfig.Cmd)
-	hostConfig := hostConfigFromOptions(b.options)
+
+	isWCOW := runtime.GOOS == "windows" && b.platform != nil && b.platform.OS == "windows"
+	hostConfig := hostConfigFromOptions(b.options, isWCOW)
 	container, err := b.containerManager.Create(runConfig, hostConfig)
 	if err != nil {
 		return "", err
@@ -428,7 +443,7 @@ func (b *Builder) create(runConfig *container.Config) (string, error) {
 	return container.ID, nil
 }
 
-func hostConfigFromOptions(options *types.ImageBuildOptions) *container.HostConfig {
+func hostConfigFromOptions(options *types.ImageBuildOptions, isWCOW bool) *container.HostConfig {
 	resources := container.Resources{
 		CgroupParent: options.CgroupParent,
 		CPUShares:    options.CPUShares,
@@ -456,7 +471,7 @@ func hostConfigFromOptions(options *types.ImageBuildOptions) *container.HostConf
 	// is too small for builder scenarios where many users are
 	// using RUN statements to install large amounts of data.
 	// Use 127GB as that's the default size of a VHD in Hyper-V.
-	if runtime.GOOS == "windows" && options.Platform == "windows" {
+	if isWCOW {
 		hc.StorageOpt = make(map[string]string)
 		hc.StorageOpt["size"] = "127GB"
 	}

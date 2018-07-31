@@ -2222,6 +2222,7 @@ _docker_daemon() {
 		--cpu-rt-period
 		--cpu-rt-runtime
 		--data-root
+		--default-address-pool
 		--default-gateway
 		--default-gateway-v6
 		--default-runtime
@@ -3401,6 +3402,7 @@ _docker_service_update_and_create() {
 	local boolean_options="
 		--detach -d
 		--help
+		--init
 		--no-healthcheck
 		--read-only
 		--tty -t
@@ -4618,6 +4620,7 @@ _docker_system_events() {
 				enable
 				exec_create
 				exec_detach
+				exec_die
 				exec_start
 				export
 				health_status
@@ -4655,6 +4658,10 @@ _docker_system_events() {
 			__docker_complete_networks --cur "${cur##*=}"
 			return
 			;;
+		scope)
+			COMPREPLY=( $( compgen -W "local swarm" -- "${cur##*=}" ) )
+			return
+			;;
 		type)
 			COMPREPLY=( $( compgen -W "config container daemon image network plugin secret service volume" -- "${cur##*=}" ) )
 			return
@@ -4667,7 +4674,7 @@ _docker_system_events() {
 
 	case "$prev" in
 		--filter|-f)
-			COMPREPLY=( $( compgen -S = -W "container daemon event image label network type volume" -- "$cur" ) )
+			COMPREPLY=( $( compgen -S = -W "container daemon event image label network scope type volume" -- "$cur" ) )
 			__docker_nospace
 			return
 			;;

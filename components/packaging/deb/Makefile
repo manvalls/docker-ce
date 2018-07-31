@@ -7,13 +7,13 @@ VERSION?=0.0.0-dev
 GO_VERSION:=1.10.3
 DEB_VERSION=$(shell ./gen-deb-ver $(ENGINE_DIR) "$(VERSION)")
 CHOWN:=docker run --rm -v $(CURDIR):/v -w /v alpine chown
-EPOCH?=
+EPOCH?=2
 
 BUILD=docker build --build-arg GO_VERSION=$(GO_VERSION) -t debbuild-$@/$(ARCH) -f $(CURDIR)/$@/Dockerfile.$(ARCH) .
 RUN=docker run --rm -i \
 	-e EPOCH='$(EPOCH)' \
-	-e DEB_VERSION=$(DEB_VERSION) \
-	-e VERSION=$(VERSION) \
+	-e DEB_VERSION=$(word 1, $(DEB_VERSION)) \
+	-e VERSION=$(word 2, $(DEB_VERSION)) \
 	-e DOCKER_GITCOMMIT=$(GITCOMMIT) \
 	-v $(CURDIR)/debbuild/$@:/build \
 	-v $(ENGINE_DIR):/engine \
@@ -34,7 +34,7 @@ clean: ## remove build artifacts
 deb: ubuntu debian raspbian ## build all deb packages
 
 .PHONY: ubuntu
-ubuntu: ubuntu-bionic ubuntu-artful ubuntu-xenial ubuntu-trusty ## build all ubuntu deb packages
+ubuntu: ubuntu-bionic ubuntu-xenial ubuntu-trusty ## build all ubuntu deb packages
 
 .PHONY: debian
 debian: debian-stretch debian-jessie ## build all debian deb packages
@@ -50,12 +50,6 @@ ubuntu-xenial: ## build ubuntu xenial deb packages
 
 .PHONY: ubuntu-trusty
 ubuntu-trusty: ## build ubuntu trusty deb packages
-	$(BUILD)
-	$(RUN)
-	$(CHOWN) -R $(shell id -u):$(shell id -g) debbuild/$@
-
-.PHONY: ubuntu-artful
-ubuntu-artful: ## build ubuntu artful deb packages
 	$(BUILD)
 	$(RUN)
 	$(CHOWN) -R $(shell id -u):$(shell id -g) debbuild/$@

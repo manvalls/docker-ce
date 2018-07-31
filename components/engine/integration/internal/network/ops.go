@@ -19,10 +19,24 @@ func WithIPv6() func(*types.NetworkCreate) {
 	}
 }
 
-// WithCheckDuplicate enables CheckDuplicate on the create network request
+// WithCheckDuplicate sets the CheckDuplicate field on create network request
 func WithCheckDuplicate() func(*types.NetworkCreate) {
 	return func(n *types.NetworkCreate) {
 		n.CheckDuplicate = true
+	}
+}
+
+// WithInternal enables Internal flag on the create network request
+func WithInternal() func(*types.NetworkCreate) {
+	return func(n *types.NetworkCreate) {
+		n.Internal = true
+	}
+}
+
+// WithAttachable sets Attachable flag on the create network request
+func WithAttachable() func(*types.NetworkCreate) {
+	return func(n *types.NetworkCreate) {
+		n.Attachable = true
 	}
 }
 
@@ -34,6 +48,22 @@ func WithMacvlan(parent string) func(*types.NetworkCreate) {
 			n.Options = map[string]string{
 				"parent": parent,
 			}
+		}
+	}
+}
+
+// WithIPvlan sets the network as ipvlan with the specified parent and mode
+func WithIPvlan(parent, mode string) func(*types.NetworkCreate) {
+	return func(n *types.NetworkCreate) {
+		n.Driver = "ipvlan"
+		if n.Options == nil {
+			n.Options = map[string]string{}
+		}
+		if parent != "" {
+			n.Options["parent"] = parent
+		}
+		if mode != "" {
+			n.Options["ipvlan_mode"] = mode
 		}
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/pkg/system"
 	"github.com/moby/buildkit/frontend/dockerfile/command"
 	"github.com/moby/buildkit/frontend/dockerfile/parser"
 	"github.com/pkg/errors"
@@ -279,13 +278,14 @@ func parseFrom(req parseRequest) (*Stage, error) {
 	if err := req.flags.Parse(); err != nil {
 		return nil, err
 	}
+
 	code := strings.TrimSpace(req.original)
 	return &Stage{
 		BaseName:   req.args[0],
 		Name:       stageName,
 		SourceCode: code,
 		Commands:   []Command{},
-		Platform:   *system.ParsePlatform(flPlatform.Value),
+		Platform:   flPlatform.Value,
 	}, nil
 
 }
@@ -580,10 +580,7 @@ func parseArg(req parseRequest) (*ArgCommand, error) {
 		return nil, errExactlyOneArgument("ARG")
 	}
 
-	var (
-		name     string
-		newValue *string
-	)
+	kvpo := KeyValuePairOptional{}
 
 	arg := req.args[0]
 	// 'arg' can just be a name or name-value pair. Note that this is different
@@ -597,16 +594,15 @@ func parseArg(req parseRequest) (*ArgCommand, error) {
 			return nil, errBlankCommandNames("ARG")
 		}
 
-		name = parts[0]
-		newValue = &parts[1]
+		kvpo.Key = parts[0]
+		kvpo.Value = &parts[1]
 	} else {
-		name = arg
+		kvpo.Key = arg
 	}
 
 	return &ArgCommand{
-		Key:             name,
-		Value:           newValue,
-		withNameAndCode: newWithNameAndCode(req),
+		KeyValuePairOptional: kvpo,
+		withNameAndCode:      newWithNameAndCode(req),
 	}, nil
 }
 
